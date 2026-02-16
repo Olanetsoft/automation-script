@@ -6,13 +6,17 @@ A collection of scripts for automating GitHub issue creation across Midnight eco
 
 ```
 .
-├── awesome-dapps/       # Create issues on repos listed in midnight-awesome-dapps
+├── awesome-dapps/
 │   ├── index.js
-│   └── .env.example
-├── contributor-hub/     # Create dApp proposal issues from an Excel spreadsheet
+│   ├── issue-template.md   # Issue title, labels, and body (markdown)
+│   ├── .env.example
+│   └── README.md
+├── contributor-hub/
 │   ├── index.js
-│   └── .env.example
-├── .env                 # Shared environment variables (git-ignored)
+│   ├── .env.example
+│   └── README.md
+├── .gitignore
+├── .env.example
 └── package.json
 ```
 
@@ -20,10 +24,9 @@ A collection of scripts for automating GitHub issue creation across Midnight eco
 
 ```bash
 npm install
-cp .env.example .env
 ```
 
-Edit `.env` with your GitHub token and configuration.
+Each script has its own `.env`. See the README in each folder for configuration details.
 
 ## Scripts
 
