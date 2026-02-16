@@ -1,6 +1,8 @@
+const path = require("path");
 const xlsx = require("xlsx");
 const axios = require("axios");
-require("dotenv").config();
+
+require("dotenv").config({ path: path.join(__dirname, ".env") });
 
 // ============================================
 // CONFIGURATION - LOADED FROM .ENV FILE
@@ -148,7 +150,7 @@ async function getProjectId() {
     const response = await githubGraphQL.post("", { query });
     if (response.data.data?.organization?.projectV2) {
       console.log(
-        `✅ Found project: ${response.data.data.organization.projectV2.title}`
+        `✅ Found project: ${response.data.data.organization.projectV2.title}`,
       );
       return response.data.data.organization.projectV2.id;
     }
@@ -156,7 +158,7 @@ async function getProjectId() {
   } catch (error) {
     console.error(
       "❌ Error fetching project ID:",
-      error.response?.data || error.message
+      error.response?.data || error.message,
     );
     return null;
   }
@@ -190,7 +192,7 @@ async function addIssueToProject(issueId, projectId) {
   } catch (error) {
     console.error(
       "❌ Error adding to project:",
-      error.response?.data || error.message
+      error.response?.data || error.message,
     );
     return false;
   }
@@ -209,7 +211,7 @@ async function checkExistingIssue(title) {
           state: "open", // Only check open issues - closed issues can be recreated
           per_page: 100,
         },
-      }
+      },
     );
 
     const existingIssue = response.data.find((issue) => issue.title === title);
@@ -274,7 +276,7 @@ async function createGitHubIssue(idea, projectId) {
     // Create the issue
     const response = await githubAPI.post(
       `/repos/${CONFIG.repoOwner}/${CONFIG.repoName}/issues`,
-      issueData
+      issueData,
     );
 
     if (response.status === 201) {
@@ -293,10 +295,16 @@ async function createGitHubIssue(idea, projectId) {
 
       return { success: true, title, url: response.data.html_url };
     }
+
+    return {
+      success: false,
+      title,
+      error: `Unexpected status ${response.status}`,
+    };
   } catch (error) {
     console.error(`❌ Failed to create issue: ${title}`);
     console.error(
-      `   Error: ${error.response?.data?.message || error.message}`
+      `   Error: ${error.response?.data?.message || error.message}`,
     );
     return { success: false, title, error: error.message };
   }
@@ -355,7 +363,7 @@ async function main() {
     console.error("❌ Error reading Excel file:", error.message);
     console.error(
       "   Make sure the file path is correct:",
-      CONFIG.excelFilePath
+      CONFIG.excelFilePath,
     );
     process.exit(1);
   }
@@ -364,7 +372,7 @@ async function main() {
   console.log(
     `📋 Found ${
       workbook.SheetNames.length
-    } sheet(s): ${workbook.SheetNames.join(", ")}`
+    } sheet(s): ${workbook.SheetNames.join(", ")}`,
   );
 
   let allData = [];
@@ -386,7 +394,7 @@ async function main() {
     console.log(`⚠️  Found ${excelDuplicates.length} duplicate dApp name(s):`);
     excelDuplicates.forEach((duplicate) => {
       console.log(
-        `   "${duplicate.name}" appears in rows: ${duplicate.rows.join(", ")}`
+        `   "${duplicate.name}" appears in rows: ${duplicate.rows.join(", ")}`,
       );
     });
     console.log("   Consider reviewing the Excel file for data quality.\n");
@@ -402,7 +410,7 @@ async function main() {
     console.log(`✅ Will add issues to project #${CONFIG.projectNumber}\n`);
   } else {
     console.log(
-      `⚠️  Could not find project #${CONFIG.projectNumber}. Issues will be created without project assignment.\n`
+      `⚠️  Could not find project #${CONFIG.projectNumber}. Issues will be created without project assignment.\n`,
     );
   }
 
@@ -422,8 +430,8 @@ async function main() {
   console.log(
     `🧪 TEST MODE: Processing ideas ${startIndex + 1} to ${Math.min(
       endIndex,
-      data.length
-    )} (${itemsToProcess} idea(s))\n`
+      data.length,
+    )} (${itemsToProcess} idea(s))\n`,
   );
 
   for (let i = startIndex; i < Math.min(endIndex, data.length); i++) {
@@ -431,7 +439,7 @@ async function main() {
     console.log(
       `Processing ${i + 1}/${data.length} (item ${
         i - startIndex + 1
-      }/${itemsToProcess}):`
+      }/${itemsToProcess}):`,
     );
 
     const result = await createGitHubIssue(idea, projectId);
@@ -447,7 +455,7 @@ async function main() {
       console.log(
         `⏳ Waiting ${
           CONFIG.delayBetweenRequests / 1000
-        } seconds before next request...\n`
+        } seconds before next request...\n`,
       );
       await delay(CONFIG.delayBetweenRequests);
     }
@@ -461,7 +469,7 @@ async function main() {
   const duplicates = results.failed.filter((r) => r.duplicate);
   const skipped = results.failed.filter((r) => r.skipped);
   const actualFailures = results.failed.filter(
-    (r) => !r.duplicate && !r.skipped
+    (r) => !r.duplicate && !r.skipped,
   );
 
   console.log(`✅ Successfully created: ${results.successful.length} issues`);

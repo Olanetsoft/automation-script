@@ -1,43 +1,40 @@
-const axios = require("axios");
 const fs = require("fs");
 const path = require("path");
-require("dotenv").config();
+const axios = require("axios");
 
-// ============================================
-// PARSE ISSUE TEMPLATE (YAML FRONT MATTER + MARKDOWN BODY)
-// ============================================
+require("dotenv").config({ path: path.join(__dirname, ".env") });
+
+// --- Template parsing ---
+
 function parseIssueTemplate(filePath) {
-  const content = fs.readFileSync(filePath, "utf-8");
-  const frontMatterMatch = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+  const raw = fs.readFileSync(filePath, "utf-8");
+  const content = raw.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n");
 
-  if (!frontMatterMatch) {
+  const match = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+  if (!match) {
     console.error(
-      `Error: issue-template.md must have YAML front matter between --- delimiters.`,
+      "Error: issue-template.md must have YAML front matter between --- delimiters.",
     );
     process.exit(1);
   }
 
-  const frontMatter = frontMatterMatch[1];
-  const body = frontMatterMatch[2].trim();
+  const frontMatter = match[1];
+  const body = match[2].trim();
 
-  // Parse title
   const titleMatch = frontMatter.match(/^title:\s*(.+)$/m);
   const title = titleMatch ? titleMatch[1].trim() : "";
 
-  // Parse labels (supports both inline comma-separated and YAML list)
   let labels = [];
-  const labelsBlockMatch = frontMatter.match(
-    /^labels:\s*\n((?:\s+-\s+.+\n?)+)/m,
-  );
-  if (labelsBlockMatch) {
-    labels = labelsBlockMatch[1]
+  const listMatch = frontMatter.match(/^labels:\s*\n((?:\s+-\s+.+\n?)+)/m);
+  if (listMatch) {
+    labels = listMatch[1]
       .split("\n")
       .map((line) => line.replace(/^\s*-\s*/, "").trim())
       .filter(Boolean);
   } else {
-    const labelsInlineMatch = frontMatter.match(/^labels:\s*(.+)$/m);
-    if (labelsInlineMatch) {
-      labels = labelsInlineMatch[1]
+    const inlineMatch = frontMatter.match(/^labels:\s*(.+)$/m);
+    if (inlineMatch) {
+      labels = inlineMatch[1]
         .split(",")
         .map((l) => l.trim())
         .filter(Boolean);
@@ -61,382 +58,203 @@ function parseIssueTemplate(filePath) {
   return { title, body, labels };
 }
 
-// ============================================
-// CONFIGURATION
-// ============================================
-const templatePath = path.join(__dirname, "issue-template.md");
+// --- Configuration ---
 
+const templatePath = path.join(__dirname, "issue-template.md");
 if (!fs.existsSync(templatePath)) {
   console.error(`Error: issue-template.md not found at ${templatePath}`);
   process.exit(1);
 }
 
-const issueTemplate = parseIssueTemplate(templatePath);
+const {
+  title: issueTitle,
+  body: issueBody,
+  labels: issueLabels,
+} = parseIssueTemplate(templatePath);
 
-const CONFIG = {
-  githubToken: process.env.GITHUB_TOKEN,
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
+const SOURCE_OWNER = "midnightntwrk";
+const SOURCE_REPO = "midnight-awesome-dapps";
+const DELAY = parseInt(process.env.DELAY_BETWEEN_REQUESTS, 10) || 3000;
+const DRY_RUN = process.env.DRY_RUN === "true";
 
-  // Source repo containing the awesome-dapps README
-  sourceOwner: "midnightntwrk",
-  sourceRepo: "midnight-awesome-dapps",
-
-  // Issue details from issue-template.md
-  issueTitle: issueTemplate.title,
-  issueBody: issueTemplate.body,
-  issueLabels: issueTemplate.labels,
-
-  // Rate limiting (milliseconds between requests)
-  delayBetweenRequests: parseInt(process.env.DELAY_BETWEEN_REQUESTS) || 3000,
-
-  // Dry run mode - set to true to preview without creating issues
-  dryRun: process.env.DRY_RUN === "true",
-};
-
-// ============================================
-// GITHUB API SETUP
-// ============================================
-const githubAPI = axios.create({
+const api = axios.create({
   baseURL: "https://api.github.com",
   headers: {
-    Authorization: `token ${CONFIG.githubToken}`,
+    Authorization: `token ${GITHUB_TOKEN}`,
     Accept: "application/vnd.github.v3+json",
-    "Content-Type": "application/json",
   },
 });
 
-// ============================================
-// HELPER FUNCTIONS
-// ============================================
-function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// ============================================
-// FETCH README FROM AWESOME-DAPPS REPO
-// ============================================
+// --- GitHub helpers ---
+
 async function fetchReadme() {
   try {
-    const response = await githubAPI.get(
-      `/repos/${CONFIG.sourceOwner}/${CONFIG.sourceRepo}/readme`,
+    const { data } = await api.get(
+      `/repos/${SOURCE_OWNER}/${SOURCE_REPO}/readme`,
       { headers: { Accept: "application/vnd.github.v3.raw" } },
     );
-    return response.data;
-  } catch (error) {
+    return data;
+  } catch (err) {
     console.error(
-      "❌ Error fetching README:",
-      error.response?.data?.message || error.message,
+      "Error fetching README:",
+      err.response?.data?.message || err.message,
     );
     process.exit(1);
   }
 }
 
-// ============================================
-// PARSE GITHUB REPO URLS FROM README
-// ============================================
-function parseReposFromReadme(readmeContent) {
-  // Match GitHub repo links: https://github.com/owner/repo
-  // Exclude file-level links (those with /blob/, /tree/, etc.)
-  const repoRegex =
-    /https:\/\/github\.com\/([a-zA-Z0-9_.-]+)\/([a-zA-Z0-9_.-]+)(?=[)\s\]])/g;
+function parseReposFromReadme(content) {
+  const regex = /https:\/\/github\.com\/([a-zA-Z0-9_.-]+)\/([a-zA-Z0-9_.-]+)/g;
+  const skip = new Set(["apps", "topics", "orgs", "contact"]);
   const seen = new Set();
   const repos = [];
 
-  let match;
-  while ((match = repoRegex.exec(readmeContent)) !== null) {
-    const owner = match[1];
-    const repo = match[2];
-    const fullUrl = `https://github.com/${owner}/${repo}`;
-
-    // Skip duplicates, non-repo links, GitHub meta pages, and the source repo itself
-    const skipOwners = ["apps", "topics", "orgs"];
+  let m;
+  while ((m = regex.exec(content)) !== null) {
+    const [, owner, repo] = m;
+    const key = `${owner}/${repo}`;
     if (
-      seen.has(fullUrl) ||
-      skipOwners.includes(owner) ||
-      (owner === CONFIG.sourceOwner && repo === CONFIG.sourceRepo)
+      seen.has(key) ||
+      skip.has(owner) ||
+      (owner === SOURCE_OWNER && repo === SOURCE_REPO)
     ) {
       continue;
     }
-
-    seen.add(fullUrl);
-    repos.push({ owner, repo, url: fullUrl });
+    seen.add(key);
+    repos.push({ owner, repo });
   }
 
   return repos;
 }
 
-// ============================================
-// CHECK IF REPO EXISTS AND ACCEPTS ISSUES
-// ============================================
-async function checkRepoAccess(owner, repo) {
+async function getRepoInfo(owner, repo) {
   try {
-    const response = await githubAPI.get(`/repos/${owner}/${repo}`);
-    const repoData = response.data;
+    const { data } = await api.get(`/repos/${owner}/${repo}`);
     return {
       exists: true,
-      hasIssues: repoData.has_issues,
-      archived: repoData.archived,
-      private: repoData.private,
+      hasIssues: data.has_issues,
+      archived: data.archived,
     };
-  } catch (error) {
-    if (error.response?.status === 404) {
-      return { exists: false };
-    }
-    console.error(
-      `   ⚠️  Error checking repo ${owner}/${repo}:`,
-      error.message,
-    );
+  } catch {
     return { exists: false };
   }
 }
 
-// ============================================
-// CHECK FOR EXISTING ISSUES ON A REPO
-// ============================================
-async function checkExistingIssue(owner, repo, title) {
+async function hasOpenIssueWithTitle(owner, repo, title) {
   try {
-    const response = await githubAPI.get(`/repos/${owner}/${repo}/issues`, {
-      params: {
-        state: "open",
-        per_page: 100,
-      },
+    const { data } = await api.get(`/repos/${owner}/${repo}/issues`, {
+      params: { state: "open", per_page: 100 },
     });
-
-    const existingIssue = response.data.find((issue) => issue.title === title);
-    if (existingIssue) {
-      return {
-        exists: true,
-        url: existingIssue.html_url,
-        state: existingIssue.state,
-      };
-    }
-    return { exists: false };
-  } catch (error) {
-    console.error(
-      `   ⚠️  Error checking issues on ${owner}/${repo}:`,
-      error.message,
-    );
+    const found = data.find((i) => i.title === title);
+    return found ? { exists: true, url: found.html_url } : { exists: false };
+  } catch {
     return { exists: false };
   }
 }
 
-// ============================================
-// CREATE ISSUE ON A REPO
-// ============================================
-async function createIssueOnRepo(owner, repo) {
-  const title = CONFIG.issueTitle;
-  const body = CONFIG.issueBody;
+async function processRepo(owner, repo) {
+  const slug = `${owner}/${repo}`;
 
-  // Check repo access
-  console.log(`   Checking repo access...`);
-  const repoInfo = await checkRepoAccess(owner, repo);
+  const info = await getRepoInfo(owner, repo);
+  if (!info.exists) return { slug, status: "skipped", reason: "not found" };
+  if (info.archived) return { slug, status: "skipped", reason: "archived" };
+  if (!info.hasIssues)
+    return { slug, status: "skipped", reason: "issues disabled" };
 
-  if (!repoInfo.exists) {
-    console.log(`   ❌ Repo not found or inaccessible: ${owner}/${repo}\n`);
-    return {
-      success: false,
-      repo: `${owner}/${repo}`,
-      error: "Repo not found",
-      skipped: true,
-    };
-  }
+  const existing = await hasOpenIssueWithTitle(owner, repo, issueTitle);
+  if (existing.exists) return { slug, status: "duplicate", url: existing.url };
 
-  if (repoInfo.archived) {
-    console.log(`   ⏭️  Repo is archived: ${owner}/${repo}\n`);
-    return {
-      success: false,
-      repo: `${owner}/${repo}`,
-      error: "Repo is archived",
-      skipped: true,
-    };
-  }
-
-  if (!repoInfo.hasIssues) {
-    console.log(`   ⏭️  Issues disabled on: ${owner}/${repo}\n`);
-    return {
-      success: false,
-      repo: `${owner}/${repo}`,
-      error: "Issues disabled",
-      skipped: true,
-    };
-  }
-
-  // Check for existing issue with same title
-  console.log(`   Checking for existing issue...`);
-  const existingCheck = await checkExistingIssue(owner, repo, title);
-
-  if (existingCheck.exists) {
-    console.log(`   ⚠️  Issue already exists: ${existingCheck.url}`);
-    console.log(`   ⏭️  Skipping...\n`);
-    return {
-      success: false,
-      repo: `${owner}/${repo}`,
-      error: "Issue already exists",
-      duplicate: true,
-      url: existingCheck.url,
-    };
-  }
-
-  // Dry run mode
-  if (CONFIG.dryRun) {
-    console.log(`   🧪 [DRY RUN] Would create issue on ${owner}/${repo}`);
-    console.log(`   Title: ${title}\n`);
-    return {
-      success: true,
-      repo: `${owner}/${repo}`,
-      url: "(dry run)",
-      dryRun: true,
-    };
-  }
-
-  // Create the issue
-  const issueData = {
-    title,
-    body,
-    labels: CONFIG.issueLabels,
-  };
+  if (DRY_RUN) return { slug, status: "dry-run" };
 
   try {
-    const response = await githubAPI.post(
-      `/repos/${owner}/${repo}/issues`,
-      issueData,
-    );
-
-    if (response.status === 201) {
-      console.log(`   ✅ Created issue on ${owner}/${repo}`);
-      console.log(`   URL: ${response.data.html_url}\n`);
-      return {
-        success: true,
-        repo: `${owner}/${repo}`,
-        url: response.data.html_url,
-      };
-    }
-  } catch (error) {
-    const msg = error.response?.data?.message || error.message;
-    console.error(`   ❌ Failed to create issue on ${owner}/${repo}`);
-    console.error(`   Error: ${msg}\n`);
-    return { success: false, repo: `${owner}/${repo}`, error: msg };
+    const { data } = await api.post(`/repos/${owner}/${repo}/issues`, {
+      title: issueTitle,
+      body: issueBody,
+      labels: issueLabels,
+    });
+    return { slug, status: "created", url: data.html_url };
+  } catch (err) {
+    return {
+      slug,
+      status: "failed",
+      reason: err.response?.data?.message || err.message,
+    };
   }
 }
 
-// ============================================
-// MAIN FUNCTION
-// ============================================
+// --- Main ---
+
 async function main() {
+  if (!GITHUB_TOKEN) {
+    console.error("Error: GITHUB_TOKEN is not set in .env");
+    process.exit(1);
+  }
+
   console.log("========================================");
   console.log("Awesome dApps Issue Creator");
   console.log("========================================\n");
 
-  if (!CONFIG.githubToken) {
-    console.error("❌ GITHUB_TOKEN is not set in .env");
-    process.exit(1);
-  }
+  if (DRY_RUN) console.log("[DRY RUN] No issues will be created.\n");
 
-  if (CONFIG.dryRun) {
-    console.log("🧪 DRY RUN MODE — no issues will be created\n");
-  }
+  console.log(`Title:  ${issueTitle}`);
+  console.log(`Labels: ${issueLabels.join(", ") || "(none)"}\n`);
 
-  console.log(`📝 Issue Title: ${CONFIG.issueTitle}`);
-  console.log(
-    `📋 Issue Labels: ${CONFIG.issueLabels.join(", ") || "(none)"}\n`,
-  );
+  console.log("Fetching README...");
+  const readme = await fetchReadme();
 
-  // Step 1: Fetch README
-  console.log("📖 Fetching README from midnight-awesome-dapps...");
-  const readmeContent = await fetchReadme();
-  console.log(`✅ README fetched (${readmeContent.length} chars)\n`);
+  const repos = parseReposFromReadme(readme);
+  console.log(`Found ${repos.length} repos.\n`);
 
-  // Step 2: Parse repos
-  console.log("🔍 Parsing GitHub repos from README...");
-  const repos = parseReposFromReadme(readmeContent);
-  console.log(`✅ Found ${repos.length} unique repos\n`);
+  if (repos.length === 0) return;
 
-  if (repos.length === 0) {
-    console.log("No repos found. Exiting.");
-    return;
-  }
-
-  // Display discovered repos
-  console.log("📋 Repos discovered:");
-  repos.forEach((r, i) => {
-    console.log(`   ${i + 1}. ${r.owner}/${r.repo}`);
-  });
-  console.log();
-
-  // Step 3: Create issues
-  console.log("🚀 Starting to create issues...\n");
-  console.log("========================================\n");
-
-  const results = { successful: [], failed: [] };
+  const results = [];
 
   for (let i = 0; i < repos.length; i++) {
     const { owner, repo } = repos[i];
-    console.log(`[${i + 1}/${repos.length}] ${owner}/${repo}`);
+    const slug = `${owner}/${repo}`;
+    console.log(`[${i + 1}/${repos.length}] ${slug}`);
 
-    const result = await createIssueOnRepo(owner, repo);
+    const result = await processRepo(owner, repo);
+    results.push(result);
 
-    if (result.success) {
-      results.successful.push(result);
-    } else {
-      results.failed.push(result);
+    switch (result.status) {
+      case "created":
+        console.log(`  -> Created: ${result.url}`);
+        break;
+      case "dry-run":
+        console.log(`  -> Would create (dry run)`);
+        break;
+      case "duplicate":
+        console.log(`  -> Duplicate: ${result.url}`);
+        break;
+      case "skipped":
+        console.log(`  -> Skipped: ${result.reason}`);
+        break;
+      case "failed":
+        console.log(`  -> Failed: ${result.reason}`);
+        break;
     }
 
-    // Rate limiting between requests
-    if (i < repos.length - 1) {
-      await delay(CONFIG.delayBetweenRequests);
-    }
+    if (i < repos.length - 1) await sleep(DELAY);
   }
 
-  // Step 4: Summary
-  console.log("========================================");
+  const count = (s) => results.filter((r) => r.status === s).length;
+
+  console.log("\n========================================");
   console.log("SUMMARY");
   console.log("========================================");
-
-  const duplicates = results.failed.filter((r) => r.duplicate);
-  const skipped = results.failed.filter((r) => r.skipped);
-  const actualFailures = results.failed.filter(
-    (r) => !r.duplicate && !r.skipped,
-  );
-
-  console.log(`✅ Successfully created: ${results.successful.length} issues`);
-  console.log(`🔄 Duplicates skipped: ${duplicates.length}`);
-  console.log(`⏭️  Skipped (archived/no issues/not found): ${skipped.length}`);
-  console.log(`❌ Failed: ${actualFailures.length}`);
-
-  if (results.successful.length > 0) {
-    console.log("\n📋 Created Issues:");
-    results.successful.forEach((r) => {
-      console.log(`   - ${r.repo} → ${r.url}`);
-    });
-  }
-
-  if (duplicates.length > 0) {
-    console.log("\n🔄 Duplicates (Skipped):");
-    duplicates.forEach((r) => {
-      console.log(`   - ${r.repo} → ${r.url}`);
-    });
-  }
-
-  if (skipped.length > 0) {
-    console.log("\n⏭️  Skipped:");
-    skipped.forEach((r) => {
-      console.log(`   - ${r.repo}: ${r.error}`);
-    });
-  }
-
-  if (actualFailures.length > 0) {
-    console.log("\n⚠️ Failed:");
-    actualFailures.forEach((r) => {
-      console.log(`   - ${r.repo}: ${r.error}`);
-    });
-  }
-
-  console.log("\n✨ Done!");
+  if (DRY_RUN) console.log(`Would create: ${count("dry-run")}`);
+  else console.log(`Created:    ${count("created")}`);
+  console.log(`Duplicates: ${count("duplicate")}`);
+  console.log(`Skipped:    ${count("skipped")}`);
+  console.log(`Failed:     ${count("failed")}`);
+  console.log("Done.");
 }
 
-// ============================================
-// RUN THE SCRIPT
-// ============================================
-main().catch((error) => {
-  console.error("❌ Unexpected error:", error);
+main().catch((err) => {
+  console.error("Unexpected error:", err);
   process.exit(1);
 });
