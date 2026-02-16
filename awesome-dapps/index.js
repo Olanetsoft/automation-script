@@ -1,23 +1,89 @@
 const axios = require("axios");
+const fs = require("fs");
+const path = require("path");
 require("dotenv").config();
 
 // ============================================
-// CONFIGURATION - LOADED FROM .ENV FILE
+// PARSE ISSUE TEMPLATE (YAML FRONT MATTER + MARKDOWN BODY)
 // ============================================
+function parseIssueTemplate(filePath) {
+  const content = fs.readFileSync(filePath, "utf-8");
+  const frontMatterMatch = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+
+  if (!frontMatterMatch) {
+    console.error(
+      `Error: issue-template.md must have YAML front matter between --- delimiters.`,
+    );
+    process.exit(1);
+  }
+
+  const frontMatter = frontMatterMatch[1];
+  const body = frontMatterMatch[2].trim();
+
+  // Parse title
+  const titleMatch = frontMatter.match(/^title:\s*(.+)$/m);
+  const title = titleMatch ? titleMatch[1].trim() : "";
+
+  // Parse labels (supports both inline comma-separated and YAML list)
+  let labels = [];
+  const labelsBlockMatch = frontMatter.match(
+    /^labels:\s*\n((?:\s+-\s+.+\n?)+)/m,
+  );
+  if (labelsBlockMatch) {
+    labels = labelsBlockMatch[1]
+      .split("\n")
+      .map((line) => line.replace(/^\s*-\s*/, "").trim())
+      .filter(Boolean);
+  } else {
+    const labelsInlineMatch = frontMatter.match(/^labels:\s*(.+)$/m);
+    if (labelsInlineMatch) {
+      labels = labelsInlineMatch[1]
+        .split(",")
+        .map((l) => l.trim())
+        .filter(Boolean);
+    }
+  }
+
+  if (!title) {
+    console.error(
+      "Error: issue-template.md is missing a title in front matter.",
+    );
+    process.exit(1);
+  }
+
+  if (!body) {
+    console.error(
+      "Error: issue-template.md has no body content after front matter.",
+    );
+    process.exit(1);
+  }
+
+  return { title, body, labels };
+}
+
+// ============================================
+// CONFIGURATION
+// ============================================
+const templatePath = path.join(__dirname, "issue-template.md");
+
+if (!fs.existsSync(templatePath)) {
+  console.error(`Error: issue-template.md not found at ${templatePath}`);
+  process.exit(1);
+}
+
+const issueTemplate = parseIssueTemplate(templatePath);
+
 const CONFIG = {
-  // GitHub Personal Access Token (needs 'public_repo' scope)
   githubToken: process.env.GITHUB_TOKEN,
 
   // Source repo containing the awesome-dapps README
   sourceOwner: "midnightntwrk",
   sourceRepo: "midnight-awesome-dapps",
 
-  // Issue configuration
-  issueTitle: process.env.ISSUE_TITLE || "Default Issue Title",
-  issueBody: process.env.ISSUE_BODY || "Default issue body.",
-  issueLabels: process.env.ISSUE_LABELS
-    ? process.env.ISSUE_LABELS.split(",").map((l) => l.trim())
-    : [],
+  // Issue details from issue-template.md
+  issueTitle: issueTemplate.title,
+  issueBody: issueTemplate.body,
+  issueLabels: issueTemplate.labels,
 
   // Rate limiting (milliseconds between requests)
   delayBetweenRequests: parseInt(process.env.DELAY_BETWEEN_REQUESTS) || 3000,

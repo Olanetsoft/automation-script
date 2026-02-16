@@ -18,16 +18,36 @@ npm install
 cp awesome-dapps/.env.example awesome-dapps/.env
 ```
 
-Edit `awesome-dapps/.env` with your values.
+Edit `awesome-dapps/.env` with your GitHub token.
 
-## Configuration
+Edit `awesome-dapps/issue-template.md` with your issue content.
+
+## Issue Template
+
+The issue title, labels, and body are defined in `awesome-dapps/issue-template.md` using YAML front matter and markdown:
+
+```markdown
+---
+title: Your issue title
+labels:
+  - enhancement
+  - help wanted
+---
+
+Your full markdown issue body goes here.
+
+Supports **bold**, _italic_, `code`, lists, links, etc.
+```
+
+- `title` (required) — the issue title
+- `labels` (optional) — list of labels to apply
+- Everything after the second `---` is the issue body, written in markdown
+
+## Environment Variables
 
 | Variable                 | Required | Description                                                        |
 | ------------------------ | -------- | ------------------------------------------------------------------ |
 | `GITHUB_TOKEN`           | Yes      | GitHub PAT with `public_repo` scope                                |
-| `ISSUE_TITLE`            | Yes      | Title for the issue                                                |
-| `ISSUE_BODY`             | Yes      | Body content for the issue                                         |
-| `ISSUE_LABELS`           | No       | Comma-separated labels (e.g. `bug,help wanted`)                    |
 | `DELAY_BETWEEN_REQUESTS` | No       | Milliseconds between API calls (default: `3000`)                   |
 | `DRY_RUN`                | No       | Set to `true` to preview without creating issues (default: `true`) |
 
