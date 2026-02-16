@@ -1,0 +1,24 @@
+{
+  "name": "github-dapp-issue-creator",
+  "version": "2.0.0",
+  "description": "Create custom issues on repos listed in midnight-awesome-dapps README",
+  "main": "index.js",
+  "scripts": {
+    "awesome-dapps": "node awesome-dapps/index.js",
+    "awesome-dapps:dry": "DRY_RUN=true node awesome-dapps/index.js",
+    "contributor-hub": "node contributor-hub/index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "github",
+    "automation",
+    "dapp",
+    "midnight"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^1.6.0",
+    "dotenv": "^17.2.2"
+  }
+}
